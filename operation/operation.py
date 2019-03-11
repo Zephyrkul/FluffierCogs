@@ -189,7 +189,7 @@ class Operation(commands.Cog):
         await ctx.send(invite.url)
 
     @inv.command(name="set")
-    @checks.admin_or_permissions(manage_server=True)
+    @checks.admin_or_permissions(manage_guild=True)
     async def _inv_set(self, ctx, *, invchannel: discord.TextChannel):
         await self.config.guild(ctx.guild).invchannel.set(invchannel)
 
