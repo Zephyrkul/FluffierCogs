@@ -179,7 +179,7 @@ class Operation(commands.Cog):
     @checks.mod()
     async def inv(self, ctx, uses: int = 1):
         invchannel = await self.config.guild(ctx.guild).invchannel()
-        invite = await invchannel.create_invite(
+        invite = await ctx.guild.get_channel(invchannel).create_invite(
             max_age=0 if uses else 1,
             max_uses=uses,
             temporary=False,
@@ -191,7 +191,7 @@ class Operation(commands.Cog):
     @inv.command(name="set")
     @checks.admin_or_permissions(manage_guild=True)
     async def _inv_set(self, ctx, *, invchannel: discord.TextChannel):
-        await self.config.guild(ctx.guild).invchannel.set(invchannel)
+        await self.config.guild(ctx.guild).invchannel.set(invchannel.id)
 
     # __________ TRIGGER __________
 
