@@ -171,8 +171,8 @@ class Update:
             til = {"name": "Ongoing", "value": "This update is ongoing."}
         return (
             discord.Embed(color=discord.Color.from_hsv(random.random(), 1, 1), timestamp=dt)
-            .add_field(name="UTC", value=f"{dt:%c}")
-            .add_field(**til)
+            .add_field(name="UTC", value=f"{dt:%c}", inline=False)
+            .add_field(**til, inline=False)
             .set_footer(text="Major" if self.major else "Minor")
         )
 
