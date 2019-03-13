@@ -36,14 +36,14 @@ async def menu(ctx, update=None, timeout=30):
     if not perms.embed_links or not perms.add_reactions:
         raise BMP(embed_links=True, add_reactions=True)
     update = update or Update(ctx.message.created_at)
-    message = await ctx.send(embed=update.embed)
+    message = await ctx.send(embed=update.embed(now=ctx.message.created_at))
     start_adding_reactions(message, reactions, loop=ctx.bot.loop)
     first = True
     while True:
         if first:
             first = False
         else:
-            await message.edit(embed=update.embed)
+            await message.edit(embed=update.embed(now=ctx.message.created_at))
         pred = ReactionPredicate.with_emojis(reactions, message, ctx.author)
         try:
             await ctx.bot.wait_for("reaction_add", check=pred, timeout=timeout)
@@ -80,15 +80,8 @@ class Update:
     current: InitVar[bool] = False
 
     def __post_init__(self, current):
+        # pylint: disable=no-member
         dt = self.dt
-        if isinstance(dt, datetime):
-            pass
-        elif isinstance(dt, (int, float)):
-            dt = datetime.utcfromtimestamp(dt)
-        elif isinstance(dt, str):
-            dt = datetime.fromisoformat(dt)
-        else:
-            raise TypeError(dt)
         if not dt.tzinfo:
             dt = dt.replace(tzinfo=pytz.UTC)
         dte = dt.astimezone(self.EASTERN)
@@ -153,13 +146,35 @@ class Update:
         # pylint: disable=no-member
         return self.dt.hour == 12
 
-    @property
-    def embed(self):
+    def embed(self, *, now=None):
         # pylint: disable=no-member
         dt = self.dt.astimezone(pytz.UTC)
-        return discord.Embed(
-            color=discord.Color.from_hsv(random.random(), 1, 1), timestamp=dt
-        ).set_footer(text="{} @ {:%c %Z}".format("Major" if self.major else "Minor", dt))
+        now = now or datetime.utcnow()
+        now = now.astimezone(pytz.UTC)
+        til = dt - now
+        hours = til.days * 24 + til.seconds // 3600
+        zero = timedelta(0)
+        if til < zero:
+            til = -til
+            hours = til.days * 24 + til.seconds // 3600
+            til = {
+                "name": "Time Since",
+                "value": f"Over {hours} hour{'' if hours == 1 else 's'} ago.",
+            }
+        elif til > self.END:
+            hours = til.days * 24 + til.seconds // 3600
+            til = {
+                "name": "Time Until",
+                "value": f"Over {hours} hour{'' if hours == 1 else 's'} from now.",
+            }
+        else:
+            til = {"name": "Ongoing", "value": "This update is ongoing."}
+        return (
+            discord.Embed(color=discord.Color.from_hsv(random.random(), 1, 1), timestamp=dt)
+            .add_field(name="UTC", value=f"{dt:%c}")
+            .add_field(**til)
+            .set_footer(text="Major" if self.major else "Minor")
+        )
 
     @property
     def end(self):
@@ -186,12 +201,13 @@ class Operation(commands.Cog):
             unique=True,
             reason=get_audit_reason(ctx.author),
         )
-        await ctx.send(invite.url)
+        await ctx.send(invite.url, delete_after=120)
 
     @inv.command(name="set")
     @checks.admin_or_permissions(manage_guild=True)
     async def _inv_set(self, ctx, *, invchannel: discord.TextChannel):
         await self.config.guild(ctx.guild).invchannel.set(invchannel.id)
+        await ctx.tick()
 
     # __________ TRIGGER __________
 
