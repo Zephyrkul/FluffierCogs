@@ -114,6 +114,11 @@ class Operation(commands.Cog):
     @commands.group()
     @requires(COMMAND)
     async def opset(self, ctx):
+        """
+        Configure various op settings.
+
+        You should probably leave this to Darc to handle.
+        """
         if not ctx.invoked_subcommand:
             settings = await self.config.guild(ctx.guild).all()
             await ctx.send(
@@ -271,6 +276,11 @@ class Operation(commands.Cog):
     @commands.command()
     @requires(OFFICER)
     async def update_over(self, ctx):
+        """
+        Marks an update as finished and removes access to operations channels.
+
+        Since archiving is not yet complete, Darc will have to archive and delete the channel himself.
+        """
         if ctx.guild not in self.operations:
             return
         # TODO: only op leaders / command
@@ -279,9 +289,14 @@ class Operation(commands.Cog):
         op = self.operations.pop(ctx.guild)
         reason = get_audit_reason(ctx.author, "Operation end.")
         # TODO: get update information
-        await asyncio.gather(
-            *(channel.delete(reason=reason) for channel in op["category"].text_channels)
-        )
+        # await asyncio.gather(*(channel.delete(reason=reason) for channel in op["category"].text_channels))
+
+        m = []
+        for channel in op["category"].text_channels:
+            m.append(f"{channel.mention}: `{ctx.prefix}logsfrom {channel.id} {channel.mention}`")
+            await channel.edit(sync_permissions=True)
+        await ctx.bot.get_user(215640856839979008).send("\n".join(m))
+
         await op["category"].voice_channels[-1].edit(name="🚫", sync_permissions=True)
         await ctx.tick()
         # TODO: post update information
