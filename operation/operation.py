@@ -111,6 +111,8 @@ class Operation(commands.Cog):
 
     # __________ HUNTER UMBRA __________
 
+    # TODO: ADD LEADER REMOVAL
+
     @commands.group()
     @requires(COMMAND)
     async def opset(self, ctx):
@@ -294,6 +296,9 @@ class Operation(commands.Cog):
         m = []
         for channel in op["category"].text_channels:
             m.append(f"{channel.mention}: `{ctx.prefix}logsfrom {channel.id} {channel.mention}`")
+            await ctx.send(
+                "\n".join(f"{m.mention}" for m in channel.overwrites if isinstance(m, Member))
+            )
             await channel.edit(sync_permissions=True)
         await ctx.bot.get_user(215640856839979008).send("\n".join(m))
 
@@ -317,7 +322,7 @@ class Operation(commands.Cog):
         for team in op["teams"]:
             team["soldiers"].discard(member)
             if member in team["channel"].overwrites:
-                await team["channel"].set_permissions(member, None)
+                await team["channel"].set_permissions(member, overwrite=None)
         await ctx.send(f"Member {member} has been removed from this op.")
 
     @commands.Cog.listener()
@@ -343,9 +348,11 @@ class Operation(commands.Cog):
             weights = [m - w for w in weights]
             team = random.choices(teams, weights)[0]
         team.setdefault("soldiers", set()).add(member)
+        overs = team["channel"].overwrites_for(member)
+        overs.update(read_messages=True, send_messages=True)
         # assign permissions
         await asyncio.gather(
-            team["channel"].set_permissions(member, read_messages=True, send_messages=True),
+            team["channel"].set_permissions(member, overwrite=overs),
             op["staging"].set_permissions(member, read_messages=False, connect=False),
         )
         await team["channel"].send(f"{member.mention} has joined.")
