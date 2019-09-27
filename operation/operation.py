@@ -5,6 +5,7 @@ import inspect
 import random
 from discord import Role, Member
 from functools import wraps
+from io import BytesIO
 from typing import Optional, Union
 
 import sans
@@ -17,6 +18,7 @@ from redbot.core.utils.mod import get_audit_reason
 from .update import menu, Update
 
 
+MAX_FILE = 8_000_000
 COMMAND = "command"
 OFFICER = "officer"
 SOLDIER = "soldier"
@@ -49,6 +51,58 @@ def requires(level: str):
         return False
 
     return permissions_check(predicate)
+
+
+def message_format(message, last_message):
+    final = []
+    if not last_message:
+        final.append(str(message.created_at.date()))
+    elif message.created_at.date() != last_message.created_at.date():
+        final.extend(("", str(message.created_at.date())))
+    if message.author.bot:
+        author = f"BOT {message.author}"
+    else:
+        author = message.author
+    if message.edited_at:
+        if message.edited_at.date() == message.created_at.date():
+            post = f" (edited {message.edited_at.time().isoformat('minutes')})"
+        else:
+            post = f" (edited {message.edited_at})"
+    else:
+        post = ""
+    final.append(
+        f"[{message.created_at.time().isoformat('minutes')}] {author}: {message.clean_content}{post}"
+    )
+    final.extend(attachment.url for attachment in message.attachments)
+    return (f"{line}\n".encode("utf-8") for line in final)
+
+
+async def log(team, destination):
+    channel = team["channel"]
+    bios = [BytesIO()]
+    last_message = None
+    async for message in channel.history(limit=None, oldest_first=True):
+        bios[-1].writelines(message_format(message, last_message))
+        if bios[-1].tell() > MAX_FILE:
+            bios.append(BytesIO())
+        last_message = message
+    for bio in bios:
+        bio.seek(0)
+    if len(bios) == 1:
+        bios = [discord.File(bios[-1], filename=f"{channel}.md")]
+    else:
+        bios = [discord.File(bio, filename=f"{channel}-{i}.md") for i, bio in enumerate(bios)]
+    embed = discord.Embed(
+        title=str(channel),
+        author=f"{team['leader'].top_role} {team['leader']}",
+        description="\n".join(f"{m.top_role.mention} {m.mention}" for m in team["soldiers"]),
+    )
+    for bio in bios:
+        if destination:
+            await destination.send(embed=embed, file=bio)
+        else:
+            team["channel"].send(embed=embed, file=bio)
+        embed = None
 
 
 class Operation(commands.Cog):
@@ -170,9 +224,9 @@ class Operation(commands.Cog):
             return await ctx.send("Shotgun ops are still in the works.")
         if ctx.guild in self.operations:
             return await ctx.send("An operation is already ongoing.")
+        op: dict = {}
+        self.operations[ctx.guild] = op
         async with ctx.typing():
-            op = {}
-            self.operations[ctx.guild] = op
             guild_settings = await self.config.guild(ctx.guild).all()
             roles = {}
             highest_role = None
@@ -281,7 +335,7 @@ class Operation(commands.Cog):
         """
         Marks an update as finished and removes access to operations channels.
 
-        Since archiving is not yet complete, Darc will have to archive and delete the channel himself.
+        The operation channels will be archived properly.
         """
         if ctx.guild not in self.operations:
             return
@@ -293,16 +347,15 @@ class Operation(commands.Cog):
         # TODO: get update information
         # await asyncio.gather(*(channel.delete(reason=reason) for channel in op["category"].text_channels))
 
-        m = []
-        for channel in op["category"].text_channels:
-            m.append(f"{channel.mention}: `{ctx.prefix}logsfrom {channel.id} {channel.mention}`")
-            await ctx.send(
-                "\n".join(f"{m.mention}" for m in channel.overwrites if isinstance(m, Member))
-            )
-            await channel.edit(sync_permissions=True)
-        await ctx.bot.get_user(215640856839979008).send("\n".join(m))
-
-        await op["category"].voice_channels[-1].edit(name="🚫", sync_permissions=True)
+        async with ctx.typing():
+            archives = ctx.guild.get_channel(await self.config.guild(ctx.guild).op_archive())
+            for team in op["teams"]:
+                await log(team, archives)
+                if archives:
+                    await team["channel"].delete(reason=reason)
+                else:
+                    await team["channel"].edit(sync_permissions=True)
+            await op["category"].voice_channels[-1].edit(name="🚫", sync_permissions=True)
         await ctx.tick()
         # TODO: post update information
 
