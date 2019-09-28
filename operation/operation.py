@@ -166,6 +166,10 @@ class Operation(commands.Cog):
             **{f"{l}_role": None for l in _levels},
         )
 
+    async def cog_command_error(self, ctx, error):
+        await ctx.send("https://imgur.com/Bv6GkIw")
+        return await ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True)
+
     @commands.group(invoke_without_command=True)
     @commands.guild_only()
     @checks.mod()
