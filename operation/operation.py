@@ -519,7 +519,23 @@ class Operation(commands.Cog):
 
     @commands.command()
     async def participants(self, ctx, *, leader: Member = None):
-        leader = leader or ctx.author
+        if ctx.guild not in self.operations:
+            return
+        op = self.operations[ctx.guild]
+        leader = leader or ctx.channel
+        for team in op["teams"]:
+            if leader in (team["leader"], team["channel"]):
+                break
+        else:
+            return await ctx.send("I couldn't find the team you were trying to get info on.")
+        embed = (
+            discord.Embed()
+            .add_field(name="Leader", value=team["leader"].mention, inline=False)
+            .add_field(
+                name="Soldiers", value="\n".join(m.mention for m in team["soldiers"]), inline=False
+            )
+        )
+        await ctx.send(embed=embed)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
