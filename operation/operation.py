@@ -54,7 +54,7 @@ def requires(level):
         cog.op_cache = cache
         return await _requires(ctx, level)
 
-    return permissions_check(predicate)
+    return commands.check(predicate)
 
 
 async def _requires(ctx, level):
