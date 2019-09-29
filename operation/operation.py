@@ -51,7 +51,7 @@ def requires(level):
             role_id = config[key]
             role = ctx.guild.get_role(role_id)
             cache.append(role or role_id)
-        ctx.__op_cache__ = cache
+        cog.op_cache = cache
         return await _requires(ctx, level)
 
     return permissions_check(predicate)
@@ -64,7 +64,7 @@ async def _requires(ctx, level):
         return True
     elif not isinstance(level, int):
         level = _levels.index(level)
-    for requirement in ctx.__op_cache__:
+    for requirement in ctx.cog.op_cache:
         if not requirement:
             continue
         elif isinstance(requirement, int):
@@ -142,6 +142,7 @@ async def log(team, destination):
 class Operation(commands.Cog):
     def __init__(self, bot):
         super().__init__()
+        self.op_cache = None
         self.bot = bot
         """
         Guild: {
@@ -166,9 +167,11 @@ class Operation(commands.Cog):
             **{f"{l}_role": None for l in _levels},
         )
 
-    async def cog_command_error(self, ctx, error):
-        await ctx.send("https://imgur.com/Bv6GkIw")
-        return await ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True)
+    def cog_command_error(self, ctx, error):
+        return asyncio.gather(
+            ctx.send("https://imgur.com/Bv6GkIw"),
+            ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True),
+        )
 
     @commands.group(invoke_without_command=True)
     @commands.guild_only()
@@ -266,7 +269,7 @@ class Operation(commands.Cog):
             roles = {}
             highest_role = None
             for i, level in reversed(list(enumerate(_levels))):
-                maybe_role = ctx.__op_cache__[i]
+                maybe_role = self.op_cache[i]
                 if isinstance(maybe_role, Role):
                     highest_role = maybe_role
                 roles[level] = highest_role
