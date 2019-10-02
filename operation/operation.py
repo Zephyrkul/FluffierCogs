@@ -2,6 +2,7 @@ import asyncio
 import collections
 import discord
 import inspect
+import logging
 import random
 from discord import Role, Member
 from functools import wraps
@@ -20,10 +21,14 @@ from redbot.core.utils.predicates import ReactionPredicate
 from .update import menu, Update
 
 
+LOG = logging.getLogger("red.operation")
 MAX_FILE = 8_000_000
 COMMAND = "command"
 OFFICER = "officer"
 SOLDIER = "soldier"
+
+
+# TODO: DISBAND DOES NOT WORK, NO TRACEBACK
 
 
 _levels = (COMMAND, OFFICER, SOLDIER)
@@ -51,7 +56,8 @@ def requires(level):
             role_id = config[key]
             role = ctx.guild.get_role(role_id)
             cache.append(role or role_id)
-        cog.op_cache = cache
+        ctx.__op_cache__ = cache
+        LOG.debug("Op cache for command %s: %s", ctx.command, cache)
         return await _requires(ctx, level)
 
     return commands.check(predicate)
@@ -64,10 +70,12 @@ async def _requires(ctx, level):
         return True
     elif not isinstance(level, int):
         level = _levels.index(level)
-    for requirement in ctx.cog.op_cache:
+    LOG.debug("Checking %s's top role against perms: %s", ctx.author, ctx.__op_cache__[level:])
+    for requirement in ctx.__op_cache__[level:]:
         if not requirement:
             continue
         elif isinstance(requirement, int):
+            LOG.warning("Missing role in guild %s (%s): %s", ctx.guild, ctx.guild.id, requirement)
             return False
         else:
             return ctx.author.top_role >= requirement
@@ -120,7 +128,7 @@ async def log(team, destination):
             title=str(channel).replace("-", " ").title(),
             description="\n".join(
                 f"{m.top_role} {m.mention}{'*' if m not in members else ''}"
-                for m in team["soldiers"]
+                for m in sorted(team["soldiers"], key=lambda m: m.top_role, reverse=True)
             ),
             colour=team["leader"].colour,
         )
@@ -134,6 +142,7 @@ async def log(team, destination):
         embed.set_footer(text="*Member never spoke in the operation channel.")
     if not destination:
         destination = team["channel"]
+        LOG.info("No specified logging destination for %s, logging to op channel.", destination)
     await destination.send(embed=embed)
     for bio in bios:
         await destination.send(file=bio)
@@ -142,7 +151,6 @@ async def log(team, destination):
 class Operation(commands.Cog):
     def __init__(self, bot):
         super().__init__()
-        self.op_cache = None
         self.bot = bot
         """
         Guild: {
@@ -269,7 +277,7 @@ class Operation(commands.Cog):
             roles = {}
             highest_role = None
             for i, level in reversed(list(enumerate(_levels))):
-                maybe_role = self.op_cache[i]
+                maybe_role = ctx.__op_cache__[i]
                 if isinstance(maybe_role, Role):
                     highest_role = maybe_role
                 roles[level] = highest_role
@@ -279,21 +287,25 @@ class Operation(commands.Cog):
                 args[type(obj)].add(obj)
             if args[Role] - default_roles:
                 if not (await _requires(ctx, COMMAND)):
+                    self.operations.pop(ctx.guild)
                     return await ctx.send("Your rank isn't high enough to run joint operations.")
             if not args[Member]:
                 args[Member].add(ctx.author)
             if shotgun and shotgun > 10:
                 obj = ctx.guild.get_role(shotgun) or ctx.guild.get_member(shotgun)
                 if not obj:
+                    self.operations.pop(ctx.guild)
                     return await ctx.send(f"{shotgun} teams on a shotgun op seems a bit... much.")
                 shotgun = None
                 args[type(obj)].add(obj)
-            if shotgun and len(args[Member]) > 1:
+            args = {k: list(v) for k, v in args.items()}
+            team_count = len(args[Member])
+            if shotgun and team_count > 1:
+                self.operations.pop(ctx.guild)
                 return await ctx.send(
                     "Shotgun ops with multiple leaders? You should probably tell Darc how you envision this, "
                     "because I'm not sure what to do here."
                 )
-            args = {k: list(v) for k, v in args.items()}
             embed = (
                 discord.Embed()
                 .add_field(
@@ -317,6 +329,7 @@ class Operation(commands.Cog):
             except asyncio.TimeoutError:
                 pass
             if not pred.result:
+                self.operations.pop(ctx.guild)
                 return await ctx.send(
                     "Alright, I've cancelled starting the op. Ask around if you're unsure how to use this."
                 )
@@ -330,9 +343,7 @@ class Operation(commands.Cog):
                     connect=False,
                     speak=False,
                 ),
-                highest_role: discord.PermissionOverwrite(
-                    read_messages=True, mention_everyone=True
-                ),
+                highest_role: discord.PermissionOverwrite(mention_everyone=True),
                 ctx.me: discord.PermissionOverwrite(
                     read_messages=True,
                     send_messages=True,
@@ -345,10 +356,13 @@ class Operation(commands.Cog):
             for role in args[Role]:
                 # read_messages is View Channel
                 staging_overs[role] = discord.PermissionOverwrite(read_messages=True, connect=True)
-            op_overs = [cat_overs.copy() for i in range(len(args[Member]))]
+            op_overs = [cat_overs.copy() for i in range(team_count)]
             for i, member in enumerate(args[Member]):
                 if not any(role in args[Role] for role in member.roles):
-                    return await ctx.send(f"{member} doesn't have any of the required roles.")
+                    self.operations.pop(ctx.guild)
+                    return await ctx.send(
+                        f"{member} doesn't have any of the required roles. You may have forgotten to specify joint op roles."
+                    )
                 staging_overs[member] = discord.PermissionOverwrite(
                     read_messages=False, connect=False
                 )
@@ -362,23 +376,32 @@ class Operation(commands.Cog):
                     name="Operation", overwrites=cat_overs, reason=reason
                 )
                 await self.config.guild(ctx.guild).op_category.set(cat.id)
+            else:
+                current_overs = cat.overwrites
+                for item, overs in cat_overs.items():
+                    c = current_overs.pop(item, None)
+                    if c != overs:
+                        await cat.set_permissions(item, overwrite=overs, reason=reason)
+                for item, overs in current_overs.items():
+                    await cat.set_permissions(item, overwrite=None, reason=reason)
             op["category"] = cat
-            c = [
-                (f"npa-coup-{i}" if random.random() < 0.001 else f"team-{i}")
-                for i in range(len(op_overs))
-            ]
+            if team_count > 1:
+                c = [
+                    (f"npa-coup-{i + 1}" if random.random() < 0.001 else f"team-{i + 1}")
+                    for i in range(team_count)
+                ]
+            else:
+                c = ["npa-coup" if random.random() < 0.001 else "operation"]
             channels = await asyncio.gather(
                 *(
                     op["category"].create_text_channel(
-                        name=c[i] if len(op_overs) > 1 else c[i][: c[i].rindex("-")],
-                        overwrites=op_overs[i],
-                        reason=reason,
+                        name=c[i], overwrites=op_overs[i], reason=reason
                     )
-                    for i in range(len(op_overs))
+                    for i in range(team_count)
                 )
             )
             op["teams"] = [
-                {"leader": args[Member][i], "channel": channels[i]} for i in range(len(op_overs))
+                {"leader": args[Member][i], "channel": channels[i]} for i in range(team_count)
             ]
             staging = cat.voice_channels
             if not staging:
@@ -428,20 +451,20 @@ class Operation(commands.Cog):
             )
         await ctx.tick()
 
-    @commands.command(aliases=["opban"])
+    @commands.command()
     @requires(OFFICER)
     async def opkick(self, ctx, *, member: Member):
         """
-        Kicks or bans the specified member from an ongoing op.
+        Kicks the specified member from an ongoing op.
         """
         if ctx.guild not in self.operations:
             return
+        if member == ctx.author:
+            return await ctx.send("I cannot let you do that. Self-harm is bad 😔")
         op = self.operations[ctx.guild]
         is_special = ctx.author == ctx.guild.owner or await ctx.bot.is_owner(ctx.author)
         if not is_special and member.top_role >= ctx.author.top_role:
             return await ctx.send(f"You can't {ctx.invoked_with} higher ranks.")
-        if ctx.invoked_with == "opban":
-            op.setdefault("blacklist", set()).add(member)
         for team in op["teams"]:
             if member == team["leader"]:
                 return await ctx.send(
@@ -451,11 +474,52 @@ class Operation(commands.Cog):
                 continue
             team["soldiers"].remove(member)
             await team["channel"].set_permissions(member, overwrite=None)
-            if ctx.invoked_with == "opkick":
-                await op["staging"].set_permissions(member, overwrite=None)
-        await ctx.send(f"Member {member} has been removed from this op.")
+            await op["staging"].set_permissions(member, overwrite=None)
+        await ctx.send(f"Member {member} has been kicked from this op.")
 
     @commands.command()
+    @requires(OFFICER)
+    async def opban(self, ctx, *, member: Member):
+        """
+        Bans the specified member from an ongoing op.
+        """
+        if ctx.guild not in self.operations:
+            return
+        if member == ctx.author:
+            return await ctx.send("I cannot let you do that. Self-harm is bad 😔")
+        op = self.operations[ctx.guild]
+        is_special = ctx.author == ctx.guild.owner or await ctx.bot.is_owner(ctx.author)
+        if not is_special and member.top_role >= ctx.author.top_role:
+            return await ctx.send(f"You can't {ctx.invoked_with} higher ranks.")
+        op.setdefault("blacklist", set()).add(member)
+        for team in op["teams"]:
+            if member == team["leader"]:
+                return await ctx.send(
+                    f"You can't {ctx.invoked_with} leaders. Use `{ctx.prefix}disband` instead."
+                )
+            if member not in team["soldiers"]:
+                continue
+            team["soldiers"].remove(member)
+            await team["channel"].set_permissions(member, overwrite=None)
+        await ctx.send(f"Member {member} has been banned from this op.")
+
+    @commands.command(hidden=True)
+    @requires(OFFICER)
+    async def move(self, ctx, member: Member, *, from_team: Union[Member, int] = None):
+        if ctx.guild not in self.operations:
+            return
+        op = self.operations[ctx.guild]
+        from_team = from_team or ctx.author
+        if isinstance(from_team, Member):
+            for team in op["teams"]:
+                if team["leader"] == from_team:
+                    break
+            else:
+                return await ctx.send(f"I couldn't find a team with leader {from_team}.")
+        if from_team != ctx.author and not (await _requires(ctx, COMMAND)):
+            return await ctx.send("Your rank isn't high enough to move from other teams.")
+
+    @commands.command(hidden=True)
     @requires(OFFICER)
     async def disband(self, ctx, *, leader: Member = None):
         """
@@ -477,6 +541,17 @@ class Operation(commands.Cog):
                 break
         else:
             return await ctx.send(f"No team found led by {leader}.")
+        LOG.warning(
+            "Stopped %sdisband. Debug information to follow.\n" "Team: %s\nLeader: %s\nPopped: %s",
+            ctx.prefix,
+            team,
+            leader,
+            teams[i],
+        )
+        return await ctx.send(
+            "Since this command doesn't currently work, I haven't changed anything. Logs have been taken."
+        )
+        # pylint: disable=unreachable
         teams.pop(i)
         # distribute leader's team
         for member in team["soldiers"]:
@@ -536,10 +611,15 @@ class Operation(commands.Cog):
         else:
             return await ctx.send("I couldn't find the team you were trying to get info on.")
         embed = (
-            discord.Embed()
+            discord.Embed(colour=leader.colour)
             .add_field(name="Leader", value=team["leader"].mention, inline=False)
             .add_field(
-                name="Soldiers", value="\n".join(m.mention for m in team["soldiers"]), inline=False
+                name="Soldiers",
+                value="\n".join(
+                    m.mention
+                    for m in sorted(team["soldiers"], key=lambda m: m.top_role, reverse=True)
+                ),
+                inline=False,
             )
         )
         await ctx.send(embed=embed)
@@ -548,9 +628,9 @@ class Operation(commands.Cog):
     async def on_voice_state_update(self, member, before, after):
         if member.bot:
             return
-        if member.guild not in self.operations:
-            return
         if before.channel == after.channel:
+            return
+        if member.guild not in self.operations:
             return
         op = self.operations[member.guild]
         if after.channel != op["staging"]:
