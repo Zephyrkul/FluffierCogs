@@ -27,7 +27,7 @@ class SecureInv(commands.Cog):
             except discord.Forbidden:
                 self.invites[guild] = set()
 
-    @commands.group(aliases=["invite"], invoke_without_command=True)
+    @commands.group(invoke_without_command=True)
     @commands.guild_only()
     @checks.mod_or_permissions(create_instant_invite=True)
     async def inv(self, ctx, days: float = 0):
