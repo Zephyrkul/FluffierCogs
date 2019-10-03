@@ -63,8 +63,11 @@ class SecureInv(commands.Cog):
 
     @_inv_set.command(name="welcome")
     async def set_welcome(self, ctx, *, welcome: discord.TextChannel):
-        if not welcome.permissions_for(ctx.me).embed_links:
-            raise commands.BotMissingPermissions(["embed_links"])
+        if (
+            not welcome.permissions_for(ctx.me).embed_links
+            or not welcome.permissions_for(ctx.me).manage_guild
+        ):
+            raise commands.BotMissingPermissions(["embed_links", "manage_guild"])
         await self.config.guild(ctx.guild).welcome.set(welcome.id)
         if ctx.guild not in self.invites:
             self.invites[ctx.guild] = set(await ctx.guild.invites())

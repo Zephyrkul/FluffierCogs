@@ -52,7 +52,7 @@ def requires(level):
         cache = []
         config = await cog.config.guild(ctx.guild).all()
         for key in l_keys:
-            role_id = config[key]
+            role_id = config.get(key)
             role = ctx.guild.get_role(role_id)
             cache.append(role or role_id)
         ctx.__op_cache__ = cache
