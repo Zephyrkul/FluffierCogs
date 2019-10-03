@@ -618,6 +618,8 @@ class Operation(commands.Cog):
             weights = [len(t.setdefault("soldiers", set())) for t in teams]
             m = max(weights)
             weights = [m - w for w in weights]
+            if not any(weights):
+                weights = [1] * len(weights)
             team = random.choices(teams, weights)[0]
         team.setdefault("soldiers", set()).add(member)
         overs = team["channel"].overwrites_for(member)
