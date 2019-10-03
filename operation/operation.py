@@ -18,10 +18,9 @@ from redbot.core.utils.mod import get_audit_reason
 from redbot.core.utils.menus import start_adding_reactions
 from redbot.core.utils.predicates import ReactionPredicate
 
-from .update import menu, Update
-
 
 LOG = logging.getLogger("red.operation")
+LOG.setLevel(logging.DEBUG)
 MAX_FILE = 8_000_000
 COMMAND = "command"
 OFFICER = "officer"
@@ -169,46 +168,18 @@ class Operation(commands.Cog):
         self.operations = {}
         self.config = Config.get_conf(self, identifier=2_113_674_295, force_registration=True)
         self.config.register_guild(
-            op_archive=None,
-            op_category=None,
-            invchannel=None,
-            **{f"{l}_role": None for l in _levels},
+            op_archive=None, op_category=None, **{f"{l}_role": None for l in _levels}
         )
 
     def cog_command_error(self, ctx, error):
-        return asyncio.gather(
-            ctx.send("https://imgur.com/Bv6GkIw"),
-            ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True),
-        )
-
-    @commands.group(invoke_without_command=True)
-    @commands.guild_only()
-    @checks.mod()
-    async def inv(self, ctx, uses: int = 1):
-        invchannel = await self.config.guild(ctx.guild).invchannel()
-        invchannel = ctx.guild.get_channel(invchannel)
-        if not invchannel:
-            return
-        invite = await invchannel.create_invite(
-            max_age=0 if uses else 1,
-            max_uses=uses,
-            temporary=False,
-            unique=True,
-            reason=get_audit_reason(ctx.author),
-        )
-        await ctx.send(invite.url, delete_after=120)
-
-    @inv.command(name="set")
-    @checks.admin_or_permissions(manage_guild=True)
-    async def _inv_set(self, ctx, *, invchannel: discord.TextChannel):
-        await self.config.guild(ctx.guild).invchannel.set(invchannel.id)
-        await ctx.tick()
-
-    # __________ TRIGGER __________
-
-    @commands.command(name="next", hidden=True)
-    async def _next(self, ctx):
-        await menu(ctx)
+        if isinstance(error, commands.CommandInvokeError):
+            return asyncio.gather(
+                ctx.send("https://imgur.com/Bv6GkIw"),
+                ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True),
+            )
+        else:
+            LOG.exception(exc_info=error)
+            return ctx.bot.on_command_error(ctx, error, unhandled_by_cog=True)
 
     # __________ HUNTER UMBRA __________
 
@@ -262,6 +233,8 @@ class Operation(commands.Cog):
     ):
         """
         Sets up an operation channel with the specified settings.
+
+        For team_leaders and joint_roles, for best results you should mention the users / roles.
 
         shotgun_teams: Unsupported. Do not use.
         team_leaders: Who leads each team. If nobody is specified, you are the one and only leader.
