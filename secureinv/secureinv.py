@@ -15,10 +15,12 @@ class SecureInv(commands.Cog):
         self.invites = {}
         self.config = Config.get_conf(self, identifier=2_113_674_295, force_registration=True)
         self.config.register_guild(invite=None, welcome=None)
+        self.config_cache = {}
         asyncio.ensure_future(self.get_invites(bot))
 
     async def get_invites(self, bot):
         settings = await self.config.all_guilds()
+        self.config_cache = settings
         for guild in bot.guilds:
             if not guild.get_channel(settings.get(guild, {}).get("welcome")):
                 continue
@@ -59,6 +61,7 @@ class SecureInv(commands.Cog):
         if not invite.permissions_for(ctx.me).create_instant_invite:
             raise commands.BotMissingPermissions(["create_instant_invite"])
         await self.config.guild(ctx.guild).invite.set(invite.id)
+        self.config_cache.set_default(ctx.guild.id, {})["invite"] = invite.id
         await ctx.tick()
 
     @_inv_set.command(name="welcome")
@@ -69,6 +72,7 @@ class SecureInv(commands.Cog):
         ):
             raise commands.BotMissingPermissions(["embed_links", "manage_guild"])
         await self.config.guild(ctx.guild).welcome.set(welcome.id)
+        self.config_cache.setdefault(ctx.guild.id, {})["welcome"] = welcome.id
         if ctx.guild not in self.invites:
             self.invites[ctx.guild] = set(await ctx.guild.invites())
         await ctx.tick()
@@ -78,13 +82,14 @@ class SecureInv(commands.Cog):
         if member.bot:
             return
         guild = member.guild
+        if not guild.me.guild_permissions.manage_guild:
+            return
+        if not guild.get_channel(self.config_cache.get(guild.id, {}).get("welcome")):
+            return
         new_invites = await guild.invites()
         old_invites = self.invites.get(guild, set())
-        if not await self.get_invites(guild):
-            if old_invites:
-                LOG.warning("Manage Guild permission lost in guild %s (%s).", guild, guild.id)
-            return
         if not old_invites:
+            self.invites[guild] = new_invites
             return
         welcome_channel = guild.get_channel(await self.config.guild(guild).welcome())
         if not welcome_channel:
