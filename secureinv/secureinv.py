@@ -44,6 +44,7 @@ class SecureInv(commands.Cog):
         if not invite.permissions_for(ctx.me).create_instant_invite:
             raise commands.BotMissingPermissions(["create_instant_invite"])
         await self.config.guild(ctx.guild).invite.set(invite.id)
+        self.config_cache.set_default(ctx.guild.id, {})["invite"] = invite.id
         await ctx.tick()
 
     @_inv_set.command(name="purge")
