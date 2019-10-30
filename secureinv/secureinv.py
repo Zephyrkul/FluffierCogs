@@ -74,3 +74,11 @@ class SecureInv(commands.Cog):
             delta = timedelta(seconds=settings["purge"])
             if member.joined_at < message.created_at - delta:
                 await member.kick(reason="Automated purge for unroled users.")
+        try:
+            invites = await guild.invites()
+        except discord.Forbidden:
+            return
+        for inv in invites:
+            if inv.max_uses == 0 and inv.max_age == 0:
+                if inv.created_at < message.created_at - delta:
+                    await inv.delete(reason="Automated deletion of permanent invites.")
