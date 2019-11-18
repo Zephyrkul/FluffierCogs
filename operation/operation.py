@@ -114,21 +114,29 @@ async def log(team, destination):
         bios[-1].writelines(message_format(message, last_message))
         if bios[-1].tell() > MAX_FILE:
             bios.append(BytesIO())
-        members.add(message.author)
+        if not message.author.bot:
+            members.add(message.author)
         last_message = message
+    if not last_message and not members:
+        LOG.info("Nothing to log.")
+        return
     for bio in bios:
         bio.seek(0)
     if len(bios) == 1:
         bios = [discord.File(bios[-1], filename=f"{channel}.md")]
     else:
         bios = [discord.File(bio, filename=f"{channel}_part-{i}.md") for i, bio in enumerate(bios)]
+    soldiers = team.get("soldiers", set())
     embed = (
         discord.Embed(
             title=str(channel).replace("-", " ").title(),
             description="\n".join(
-                f"{m.top_role} {m.mention}{'*' if m not in members else ''}"
-                for m in sorted(team["soldiers"], key=lambda m: m.top_role, reverse=True)
-            ),
+                f"{m.top_role} {m.mention}{'*' if m not in members else ('✝' if m not in soldiers else '')}"
+                for m in sorted(
+                    soldiers | members, key=lambda m: (m.top_role, -m.id), reverse=True
+                )
+            )
+            or "*Nobody*",
             colour=team["leader"].colour,
         )
         .set_author(
@@ -137,8 +145,14 @@ async def log(team, destination):
         )
         .set_thumbnail(url=team["leader"].guild.icon_url)
     )
-    if team["soldiers"] - members:
-        embed.set_footer(text="*Member never spoke in the operation channel.")
+    if soldiers ^ members:
+        embed.add_field(
+            name="\u200b",
+            value=(
+                "* Member never spoke in the operation channel.\n"
+                "✝ Member left mid-operation but still spoke in the channel."
+            ),
+        )
     if not destination:
         destination = team["channel"]
         LOG.info("No specified logging destination for %s, logging to op channel.", destination)
@@ -584,13 +598,15 @@ class Operation(commands.Cog):
         else:
             return await ctx.send("I couldn't find the team you were trying to get info on.")
         embed = (
-            discord.Embed(colour=leader.colour)
+            discord.Embed(colour=team["leader"].colour)
             .add_field(name="Leader", value=team["leader"].mention, inline=False)
             .add_field(
                 name="Soldiers",
                 value="\n".join(
                     m.mention
-                    for m in sorted(team["soldiers"], key=lambda m: m.top_role, reverse=True)
+                    for m in sorted(
+                        team["soldiers"], key=lambda m: (m.top_role, -m.id), reverse=True
+                    )
                 ),
                 inline=False,
             )
