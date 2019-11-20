@@ -117,9 +117,10 @@ async def log(team, destination):
         if not message.author.bot:
             members.add(message.author)
         last_message = message
-    if not last_message and not members:
+    if not last_message or not members:
         LOG.info("Nothing to log.")
         return
+    members.discard(team["leader"])
     for bio in bios:
         bio.seek(0)
     if len(bios) == 1:
