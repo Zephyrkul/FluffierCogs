@@ -333,8 +333,7 @@ class Operation(commands.Cog):
                     speak=False,
                 ),
                 highest_role: discord.PermissionOverwrite(
-                    mention_everyone=True,
-                    manage_messages=True,
+                    mention_everyone=True, manage_messages=True,
                 ),
                 ctx.me: discord.PermissionOverwrite(
                     read_messages=True,
@@ -360,7 +359,10 @@ class Operation(commands.Cog):
                     read_messages=False, connect=False
                 )
                 op_overs[i][member] = discord.PermissionOverwrite(
-                    read_messages=True, send_messages=True, manage_messages=True, mention_everyone=True
+                    read_messages=True,
+                    send_messages=True,
+                    manage_messages=True,
+                    mention_everyone=True,
                 )
             reason = get_audit_reason(ctx.author, "Operation start.")
             cat = ctx.guild.get_channel(await self.config.guild(ctx.guild).op_category())
