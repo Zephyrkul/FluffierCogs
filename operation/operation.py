@@ -186,6 +186,12 @@ class Operation(commands.Cog):
             op_archive=None, op_category=None, **{f"{l}_role": None for l in _levels}
         )
 
+    async def red_delete_data_for_user(self, *, requester, user_id):
+        pass  # nothing to delete
+
+    async def red_get_data_for_user(self, *, user_id):
+        return {}  # nothing to get
+
     def cog_command_error(self, ctx, error):
         if isinstance(error, commands.CommandInvokeError):
             return asyncio.gather(

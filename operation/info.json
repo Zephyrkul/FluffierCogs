@@ -11,5 +11,6 @@
     "description": "Organize NS military gameplay.",
     "tags": [
         "utility"
-    ]
+    ],
+    "end_user_data_statement": "This cog does not persistently store any data or metadata about users."
 }
