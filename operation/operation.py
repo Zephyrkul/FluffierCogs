@@ -1,5 +1,6 @@
 import asyncio
 import collections
+import contextlib
 import discord
 import inspect
 import logging
@@ -7,12 +8,12 @@ import random
 from discord import Role, Member
 from functools import wraps
 from io import BytesIO
-from typing import Optional, Union
+from typing import Dict, List, Optional, Set, TypedDict, Union
 
 import sans
 from sans.api import Api, Dumps
 
-from redbot.core import checks, commands, Config
+from redbot.core import bot, checks, commands, Config
 from redbot.core.commands.requires import permissions_check
 from redbot.core.utils.mod import get_audit_reason
 from redbot.core.utils.menus import start_adding_reactions
@@ -69,12 +70,19 @@ async def _requires(ctx, level):
         return True
     elif not isinstance(level, int):
         level = _levels.index(level)
-    LOG.debug("Checking %s's top role against perms: %s", ctx.author, ctx.__op_cache__[level:])
+    LOG.debug(
+        "Checking %s's top role against perms: %s", ctx.author, ctx.__op_cache__[level:]
+    )
     for requirement in ctx.__op_cache__[level:]:
         if not requirement:
             continue
         elif isinstance(requirement, int):
-            LOG.warning("Missing role in guild %s (%s): %s", ctx.guild, ctx.guild.id, requirement)
+            LOG.warning(
+                "Missing role in guild %s (%s): %s",
+                ctx.guild,
+                ctx.guild.id,
+                requirement,
+            )
             return False
         else:
             return ctx.author.top_role >= requirement
@@ -126,7 +134,10 @@ async def log(team, destination):
     if len(bios) == 1:
         bios = [discord.File(bios[-1], filename=f"{channel}.md")]
     else:
-        bios = [discord.File(bio, filename=f"{channel}_part-{i}.md") for i, bio in enumerate(bios)]
+        bios = [
+            discord.File(bio, filename=f"{channel}_part-{i}.md")
+            for i, bio in enumerate(bios)
+        ]
     soldiers = team.get("soldiers", set())
     embed = (
         discord.Embed(
@@ -156,16 +167,37 @@ async def log(team, destination):
         )
     if not destination:
         destination = team["channel"]
-        LOG.info("No specified logging destination for %s, logging to op channel.", destination)
+        LOG.info(
+            "No specified logging destination for %s, logging to op channel.",
+            destination,
+        )
     await destination.send(embed=embed)
     for bio in bios:
         await destination.send(file=bio)
 
 
+class OpTeam(TypedDict):
+    channel: discord.TextChannel
+    leader: discord.Member
+    soldiers: Set[discord.Member]
+
+
+class OpDict(TypedDict):
+    category: discord.CategoryChannel
+    staging: discord.VoiceChannel
+    teams: List[OpTeam]
+    blacklist: Set[discord.Member]
+
+
 class Operation(commands.Cog):
-    def __init__(self, bot):
+    _shutdown_cmds = ("shutdown", "restart")
+
+    def __init__(self, bot: bot.Red):
         super().__init__()
         self.bot = bot
+        for cmd in self._shutdown_cmds:
+            if command := bot.get_command(cmd):
+                command.add_check(self._shutdown_check)
         """
         Guild: {
             Category: CategoryChannel
@@ -180,17 +212,33 @@ class Operation(commands.Cog):
             Blacklist: {Member...}
         }
         """
-        self.operations = {}
-        self.config = Config.get_conf(self, identifier=2_113_674_295, force_registration=True)
+        self.operations: Dict[discord.Guild, OpDict] = {}
+        self.config = Config.get_conf(
+            self, identifier=2_113_674_295, force_registration=True
+        )
         self.config.register_guild(
             op_archive=None, op_category=None, **{f"{l}_role": None for l in _levels}
         )
+
+    def _shutdown_check(self, ctx):
+        if self.operations:
+            raise commands.UserFeedbackCheckFailure(
+                f"I'm afraid I can't do that, {ctx.author.display_name}.\n"
+                "There's an op going on."
+            )
+        return True
 
     async def red_delete_data_for_user(self, *, requester, user_id):
         pass  # nothing to delete
 
     async def red_get_data_for_user(self, *, user_id):
         return {}  # nothing to get
+
+    def cog_unload(self):
+        for cmd in self._shutdown_cmds:
+            if command := self.bot.get_command(cmd):
+                with contextlib.suppress(ValueError):
+                    command.checks.remove(self._shutdown_check)
 
     def cog_command_error(self, ctx, error):
         if isinstance(error, commands.CommandInvokeError):
@@ -265,7 +313,7 @@ class Operation(commands.Cog):
             return await ctx.send("Shotgun ops are still in the works.")
         if ctx.guild in self.operations:
             return await ctx.send("An operation is already ongoing.")
-        op: dict = {}
+        op: OpDict = {}
         self.operations[ctx.guild] = op
         async with ctx.typing():
             roles = {}
@@ -282,14 +330,18 @@ class Operation(commands.Cog):
             if args[Role] - default_roles:
                 if not (await _requires(ctx, COMMAND)):
                     self.operations.pop(ctx.guild)
-                    return await ctx.send("Your rank isn't high enough to run joint operations.")
+                    return await ctx.send(
+                        "Your rank isn't high enough to run joint operations."
+                    )
             if not args[Member]:
                 args[Member].add(ctx.author)
             if shotgun and shotgun > 10:
                 obj = ctx.guild.get_role(shotgun) or ctx.guild.get_member(shotgun)
                 if not obj:
                     self.operations.pop(ctx.guild)
-                    return await ctx.send(f"{shotgun} teams on a shotgun op seems a bit... much.")
+                    return await ctx.send(
+                        f"{shotgun} teams on a shotgun op seems a bit... much."
+                    )
                 shotgun = None
                 args[type(obj)].add(obj)
             args = {k: list(v) for k, v in args.items()}
@@ -339,7 +391,8 @@ class Operation(commands.Cog):
                     speak=False,
                 ),
                 highest_role: discord.PermissionOverwrite(
-                    mention_everyone=True, manage_messages=True,
+                    mention_everyone=True,
+                    manage_messages=True,
                 ),
                 ctx.me: discord.PermissionOverwrite(
                     read_messages=True,
@@ -353,7 +406,9 @@ class Operation(commands.Cog):
             staging_overs = cat_overs.copy()
             for role in args[Role]:
                 # read_messages is View Channel
-                staging_overs[role] = discord.PermissionOverwrite(read_messages=True, connect=True)
+                staging_overs[role] = discord.PermissionOverwrite(
+                    read_messages=True, connect=True
+                )
             op_overs = [cat_overs.copy() for i in range(team_count)]
             for i, member in enumerate(args[Member]):
                 if not any(role in args[Role] for role in member.roles):
@@ -371,7 +426,9 @@ class Operation(commands.Cog):
                     mention_everyone=True,
                 )
             reason = get_audit_reason(ctx.author, "Operation start.")
-            cat = ctx.guild.get_channel(await self.config.guild(ctx.guild).op_category())
+            cat = ctx.guild.get_channel(
+                await self.config.guild(ctx.guild).op_category()
+            )
             if not cat:
                 cat = await ctx.guild.create_category(
                     name="Operation", overwrites=cat_overs, reason=reason
@@ -388,7 +445,11 @@ class Operation(commands.Cog):
             op["category"] = cat
             if team_count > 1:
                 c = [
-                    (f"npa-coup-{i + 1}" if random.random() < 0.001 else f"team-{i + 1}")
+                    (
+                        f"npa-coup-{i + 1}"
+                        if random.random() < 0.001
+                        else f"team-{i + 1}"
+                    )
                     for i in range(team_count)
                 ]
             else:
@@ -402,7 +463,8 @@ class Operation(commands.Cog):
                 )
             )
             op["teams"] = [
-                {"leader": args[Member][i], "channel": channels[i]} for i in range(team_count)
+                {"leader": args[Member][i], "channel": channels[i]}
+                for i in range(team_count)
             ]
             staging = cat.voice_channels
             if not staging:
@@ -419,9 +481,13 @@ class Operation(commands.Cog):
                     )
                 )
             op["staging"] = staging
-        await ctx.send(f"Done. Remember to run `{ctx.prefix}update_over` once you're done.")
+        await ctx.send(
+            f"Done. Remember to run `{ctx.prefix}update_over` once you're done."
+        )
         # they aren't going to remember
-        ctx.bot.loop.call_later(5 * 60 * 60, asyncio.ensure_future, ctx.invoke(self.update_over))
+        ctx.bot.loop.call_later(
+            5 * 60 * 60, asyncio.ensure_future, ctx.invoke(self.update_over)
+        )
 
     @commands.command()
     @requires(OFFICER)
@@ -433,14 +499,16 @@ class Operation(commands.Cog):
         """
         if ctx.guild not in self.operations:
             return
-        if ctx.author not in (t["leader"] for t in self.operations[ctx.guild]["teams"]) and not (
-            await _requires(ctx, COMMAND)
-        ):
+        if ctx.author not in (
+            t["leader"] for t in self.operations[ctx.guild]["teams"]
+        ) and not (await _requires(ctx, COMMAND)):
             return await ctx.send("Only op leaders and Command can end ops")
         op = self.operations.pop(ctx.guild)
         reason = get_audit_reason(ctx.author, "Operation end.")
         async with ctx.typing():
-            archives = ctx.guild.get_channel(await self.config.guild(ctx.guild).op_archive())
+            archives = ctx.guild.get_channel(
+                await self.config.guild(ctx.guild).op_archive()
+            )
             for team in op["teams"]:
                 await log(team, archives)
                 if archives:
@@ -516,9 +584,13 @@ class Operation(commands.Cog):
                 if team["leader"] == from_team:
                     break
             else:
-                return await ctx.send(f"I couldn't find a team with leader {from_team}.")
+                return await ctx.send(
+                    f"I couldn't find a team with leader {from_team}."
+                )
         if from_team != ctx.author and not (await _requires(ctx, COMMAND)):
-            return await ctx.send("Your rank isn't high enough to move from other teams.")
+            return await ctx.send(
+                "Your rank isn't high enough to move from other teams."
+            )
 
     @commands.command(hidden=True)
     @requires(OFFICER)
@@ -543,7 +615,8 @@ class Operation(commands.Cog):
         else:
             return await ctx.send(f"No team found led by {leader}.")
         LOG.warning(
-            "Stopped %sdisband. Debug information to follow.\n" "Team: %s\nLeader: %s\nPopped: %s",
+            "Stopped %sdisband. Debug information to follow.\n"
+            "Team: %s\nLeader: %s\nPopped: %s",
             ctx.prefix,
             team,
             leader,
@@ -572,7 +645,9 @@ class Operation(commands.Cog):
                 f"{member.mention} has joined from {leader.display_name}'s team."
             )
         # archive op channel
-        archives = ctx.guild.get_channel(await self.config.guild(ctx.guild).op_archive())
+        archives = ctx.guild.get_channel(
+            await self.config.guild(ctx.guild).op_archive()
+        )
         await log(team, archives)
         if archives:
             await team["channel"].delete()
@@ -610,7 +685,9 @@ class Operation(commands.Cog):
             if leader in (team["leader"], team["channel"]):
                 break
         else:
-            return await ctx.send("I couldn't find the team you were trying to get info on.")
+            return await ctx.send(
+                "I couldn't find the team you were trying to get info on."
+            )
         embed = (
             discord.Embed(colour=team["leader"].colour)
             .add_field(name="Leader", value=team["leader"].mention, inline=False)
@@ -619,7 +696,9 @@ class Operation(commands.Cog):
                 value="\n".join(
                     m.mention
                     for m in sorted(
-                        team["soldiers"], key=lambda m: (m.top_role, -m.id), reverse=True
+                        team["soldiers"],
+                        key=lambda m: (m.top_role, -m.id),
+                        reverse=True,
                     )
                 ),
                 inline=False,
